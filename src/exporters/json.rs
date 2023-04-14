@@ -211,12 +211,8 @@ impl JSONExporter {
     /// Runs iteration() every 'step', until 'timeout'
     pub fn runner(&mut self, parameters: ArgMatches) {
         let topology = self.sensor.get_topology().unwrap();
-        let mut metric_generator = MetricGenerator::new(
-            topology,
-            utils::get_hostname(),
-            parameters.get_flag("qemu"),
-            parameters.get_flag("containers"),
-        );
+        let mut metric_generator =
+            MetricGenerator::new(topology, utils::get_hostname(), false, false);
 
         // We have a default value of 2s so it is safe to unwrap the option
         // Panic if a non numerical value is passed
