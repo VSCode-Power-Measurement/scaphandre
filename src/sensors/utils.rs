@@ -8,8 +8,8 @@ use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 use sysinfo::{
-    get_current_pid, CpuExt, CpuRefreshKind, Pid, Process, ProcessExt, ProcessStatus, System,
-    SystemExt,
+    get_current_pid, CpuExt, CpuRefreshKind, Pid, PidExt, Process, ProcessExt, ProcessStatus,
+    System, SystemExt,
 };
 #[cfg(all(target_os = "linux", feature = "containers"))]
 use {docker_sync::container::Container, k8s_sync::Pod};
@@ -785,6 +785,18 @@ impl ProcessTracker {
                 }
             }
         }
+    }
+
+    pub fn get_usage_for_pid(&self, pid_no: &u32) -> Vec<(IProcess, f64)> {
+        let pid = Pid::from_u32(*pid_no);
+        let mut consumers: Vec<(IProcess, f64)> = vec![];
+        let records = self
+            .find_records(pid)
+            .expect("We should have some record of this pid");
+        let diff = self.get_cpu_usage_percentage(pid, self.nb_cores);
+        let p_record = records.last().unwrap();
+        consumers.push((p_record.process.clone(), diff as f64));
+        consumers
     }
 }
 
