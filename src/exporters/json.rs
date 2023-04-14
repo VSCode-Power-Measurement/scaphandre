@@ -78,6 +78,15 @@ impl Exporter for JSONExporter {
             .action(clap::ArgAction::Set);
         options.push(arg);
 
+        let arg = Arg::new("pid")
+            .help("Specific PID to trace.")
+            .long("pid")
+            .short('p')
+            .required(false)
+            .value_parser(value_parser!(u32))
+            .action(clap::ArgAction::Set);
+        options.push(arg);
+
         #[cfg(feature = "containers")]
         {
             let arg = Arg::new("containers")
@@ -223,19 +232,10 @@ impl JSONExporter {
             .get_one("step_duration_nano")
             .expect("Wrong step_duration_nano value, should be a number of nano seconds");
 
-        self.regex = if !parameters.get_flag("regex_filter")
-            || parameters
-                .get_one::<String>("regex_filter")
-                .unwrap()
-                .is_empty()
-        {
-            None
-        } else {
-            Some(
-                Regex::new(parameters.get_one::<String>("regex_filter").unwrap())
-                    .expect("Wrong regex_filter, regexp is invalid"),
-            )
-        };
+        if let Some(regex) = parameters.get_one::<String>("regex_filter") {
+            self.regex =
+                Some(Regex::new(regex).expect("regex_filter must be a valid regular expression"));
+        }
 
         if parameters.value_source("regex_filter") == Some(ValueSource::CommandLine)
             && parameters.value_source("max_top_consumers") == Some(ValueSource::CommandLine)
@@ -381,38 +381,37 @@ impl JSONExporter {
         }
 
         let consumers: Vec<(IProcess, f64)>;
-        let max_top = parameters
-            .get_one::<String>("max_top_consumers")
-            .unwrap_or(&String::from("10"))
-            .parse::<u16>()
-            .unwrap();
+        let max_top = *parameters
+            .get_one::<u16>("max_top_consumers")
+            .unwrap_or(&10);
         if let Some(regex_filter) = &self.regex {
             debug!("Processes filtered by '{}':", regex_filter.as_str());
             consumers = metric_generator
                 .topology
                 .proc_tracker
                 .get_filtered_processes(regex_filter);
-        } else if parameters.get_flag("container_regex") {
-            #[cfg(feature = "containers")]
-            {
-                consumers = metric_generator.get_processes_filtered_by_container_name(
-                    &Regex::new(parameters.get_one::<String>("container_regex").unwrap())
-                        .expect("Wrong container_regex expression. Regexp is invalid."),
-                );
-            }
-            #[cfg(not(feature = "containers"))]
-            {
-                consumers = metric_generator
-                    .topology
-                    .proc_tracker
-                    .get_top_consumers(max_top);
-            }
+        } else if let Some(pid) = parameters.get_one::<u32>("pid") {
+            consumers = metric_generator
+                .topology
+                .proc_tracker
+                .get_usage_for_pid(pid);
         } else {
             consumers = metric_generator
                 .topology
                 .proc_tracker
                 .get_top_consumers(max_top);
         }
+
+        #[cfg(feature = "containers")]
+        if parameters.contains_id("container_regex") {
+            {
+                consumers = metric_generator.get_processes_filtered_by_container_name(
+                    &Regex::new(parameters.get_one::<String>("container_regex").unwrap())
+                        .expect("Wrong container_regex expression. Regexp is invalid."),
+                );
+            }
+        }
+
         let mut top_consumers = consumers
             .iter()
             .filter_map(|(process, _value)| {
@@ -429,6 +428,7 @@ impl JSONExporter {
                         consumption: format!("{}", metric.metric_value).parse::<f32>().unwrap(),
                         resources_usage: None,
                         timestamp: metric.timestamp.as_secs_f64(),
+                        #[cfg(feature = "containers")]
                         container: match parameters.get_flag("containers") {
                             true => metric.attributes.get("container_id").map(|container_id| {
                                 Container {
@@ -455,11 +455,12 @@ impl JSONExporter {
                             }),
                             false => None,
                         },
+                        container: None,
                     })
             })
             .collect::<Vec<_>>();
 
-        if parameters.get_flag("resources") {
+        if parameters.contains_id("resources") {
             for c in top_consumers.iter_mut() {
                 let mut res = ResourcesUsage {
                     cpu_usage: String::from("0"),
